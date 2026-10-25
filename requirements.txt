@@ -1,0 +1,8 @@
+# ==============================================================================
+# Smart Agriculture Agent - Dependencies
+# ==============================================================================
+# Streamlit is the framework used to build our web user interface.
+# Pandas is used for managing historical tabular data and time-series plotting.
+# Note: 'sqlite3' is part of Python's standard library and does not require installation.
+streamlit>=1.32.0
+pandas>=2.0.0
