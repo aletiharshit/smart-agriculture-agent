@@ -4,7 +4,7 @@ Provides transparent, deterministic IF-THEN expert rules grounded in verified
 agronomic guidelines for Rice, Wheat, Maize, Cotton, and Tomato across 4 growth stages.
 """
 
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional, Tuple
 
 # Agronomic thresholds based on standard agricultural extension guidelines
 CROP_THRESHOLDS: Dict[str, Dict[str, Any]] = {
@@ -274,5 +274,138 @@ def evaluate_conditions(
         "practical_steps": practical_steps,
         "optimal_moisture_range": (opt_m_min, opt_m_max),
         "optimal_temp_range": (opt_t_min, opt_t_max),
-        "crop_description": crop_info["description"]
+        "crop_description": crop_info["description"],
+        "crop_context": crop_info["description"]
     }
+
+
+def get_optimal_moisture_band(crop: str, stage: str = "Vegetative") -> Tuple[float, float]:
+    """Returns (min_moisture, max_moisture) for the specified crop and growth stage."""
+    crop_info = CROP_THRESHOLDS.get(crop, CROP_THRESHOLDS.get("Tomato", {}))
+    stages = crop_info.get("stages", {})
+    stage_info = stages.get(stage, next(iter(stages.values()), {"moisture_min": 50.0, "moisture_max": 75.0}))
+    return (float(stage_info["moisture_min"]), float(stage_info["moisture_max"]))
+
+
+def get_safe_temp_range(crop: str) -> Tuple[float, float]:
+    """Returns (min_temp, max_temp) for the specified crop."""
+    crop_info = CROP_THRESHOLDS.get(crop, CROP_THRESHOLDS.get("Tomato", {}))
+    return (float(crop_info.get("temp_min", 18.0)), float(crop_info.get("temp_max", 32.0)))
+
+
+def evaluate_moisture_condition(arg1, arg2="Vegetative", arg3=50.0, **kwargs) -> Dict[str, Any]:
+    """
+    Evaluates hydration status against optimal crop threshold band.
+    Flexible signature: accepts (crop, stage, soil_moisture) or (soil_moisture, crop, stage) or kwargs.
+    Used for focused irrigation management.
+    """
+    if isinstance(arg1, (int, float)):
+        soil_moisture = float(arg1)
+        crop = str(arg2)
+        stage = str(arg3) if isinstance(arg3, str) else "Vegetative"
+    else:
+        crop = str(arg1)
+        stage = str(arg2) if isinstance(arg2, str) else "Vegetative"
+        soil_moisture = float(arg3) if isinstance(arg3, (int, float)) else 50.0
+
+    crop = kwargs.get("crop", crop)
+    stage = kwargs.get("stage", kwargs.get("growth_stage", stage))
+    soil_moisture = float(kwargs.get("soil_moisture", kwargs.get("moisture", soil_moisture)))
+
+    opt_min, opt_max = get_optimal_moisture_band(crop, stage)
+    if soil_moisture < opt_min - 15.0:
+        return {
+            "status": "Critical",
+            "moisture_state": "Severe Deficit",
+            "action_title": f"Critical Deficit: Soil moisture ({soil_moisture:.1f}%) is far below safe minimum ({opt_min:.0f}%). Immediate irrigation required.",
+            "reasoning": f"Root zone hydration is severely depleted for {crop}. Hydraulic tension is restricting stomatal conductance and causing wilting.",
+            "optimal_band": (opt_min, opt_max)
+        }
+    elif soil_moisture < opt_min:
+        return {
+            "status": "Warning",
+            "moisture_state": "Deficit",
+            "action_title": f"Moisture Depleted: Current moisture ({soil_moisture:.1f}%) is below optimal ({opt_min:.0f}%–{opt_max:.0f}%). Schedule irrigation.",
+            "reasoning": f"Transpirational demand exceeds current soil moisture availability for {crop} at {stage} stage.",
+            "optimal_band": (opt_min, opt_max)
+        }
+    elif soil_moisture > opt_max + 15.0:
+        return {
+            "status": "Critical",
+            "moisture_state": "Waterlogging Hazard",
+            "action_title": f"Saturation Alert: Moisture ({soil_moisture:.1f}%) exceeds upper bound ({opt_max:.0f}%). Suspend watering & inspect drainage.",
+            "reasoning": f"Saturated root zone deprives roots of oxygen, risking anaerobic rot and Pythium infection.",
+            "optimal_band": (opt_min, opt_max)
+        }
+    elif soil_moisture > opt_max:
+        return {
+            "status": "Warning",
+            "moisture_state": "Excess",
+            "action_title": f"Moisture Elevated: Current reading ({soil_moisture:.1f}%) is above target ceiling ({opt_max:.0f}%). Pause irrigation.",
+            "reasoning": f"Soil has surplus water; further irrigation is wasteful and may leach nutrients.",
+            "optimal_band": (opt_min, opt_max)
+        }
+    else:
+        return {
+            "status": "Optimal",
+            "moisture_state": "Optimal",
+            "action_title": f"Moisture Balanced: Reading ({soil_moisture:.1f}%) is within optimal band ({opt_min:.0f}%–{opt_max:.0f}%). Maintain regimen.",
+            "reasoning": f"Root zone hydration is balanced for {crop} during {stage}. Stomata and nutrient uptake function optimally.",
+            "optimal_band": (opt_min, opt_max)
+        }
+
+
+def evaluate_all_rules(
+    crop: str,
+    growth_stage: str,
+    soil_moisture: float,
+    temperature: float,
+    leaf_wetness_hours: float = 0.0,
+    symptoms: Optional[List[str]] = None
+) -> Dict[str, Any]:
+    """
+    Comprehensive rule-based agronomic evaluation encompassing soil moisture,
+    ambient temperature, leaf wetness duration, and observed symptoms.
+    """
+    res = evaluate_conditions(
+        crop_type=crop,
+        growth_stage=growth_stage,
+        soil_moisture=float(soil_moisture),
+        temperature=float(temperature)
+    )
+
+    reasoning_points = res["reasoning"].split(" • ") if isinstance(res["reasoning"], str) else list(res["reasoning"])
+    practical_steps = list(res.get("practical_steps", []))
+    status = res.get("status", "Optimal")
+
+    # Evaluate leaf wetness
+    if leaf_wetness_hours >= 6.0:
+        reasoning_points.append(
+            f"Extended leaf wetness ({leaf_wetness_hours:.1f} hours) dramatically increases foliar fungal infection probability (Blight / Downy Mildew)."
+        )
+        practical_steps.append("Avoid overhead sprinkling; inspect underside of canopy for early sporulation.")
+        if status == "Optimal":
+            status = "Warning"
+
+    # Evaluate visual symptoms
+    if symptoms:
+        symptom_str = ", ".join(symptoms)
+        reasoning_points.append(f"Visual anomalies reported: {symptom_str}.")
+        for s in symptoms:
+            s_lower = s.lower()
+            if "wilt" in s_lower:
+                practical_steps.append("Check vascular bundles near stem base for bacterial or fungal discoloration.")
+            elif "yellow" in s_lower:
+                practical_steps.append("Assess leaf age: lower leaf chlorosis indicates nitrogen/magnesium deficiency; upper leaf chlorosis suggests iron/sulfur deficit.")
+            elif "mildew" in s_lower or "spot" in s_lower:
+                practical_steps.append("Isolate infected leaves and apply prophylactic copper or sulfur formulation as appropriate.")
+            elif "chew" in s_lower or "curl" in s_lower:
+                practical_steps.append("Scout for sucking pests (aphids/thrips) on leaf undersides and deploy yellow sticky traps.")
+        if status == "Optimal":
+            status = "Warning"
+
+    res["status"] = status
+    res["reasoning"] = reasoning_points
+    res["practical_steps"] = practical_steps
+    return res
+
